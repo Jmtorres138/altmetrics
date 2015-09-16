@@ -1,0 +1,299 @@
+---
+title: "On the origin of citations"
+author: "Jason Matthew Torres"
+date: "September 15, 2015"
+output:
+  word_document: default
+  html_document:
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 8
+    highlight: espresso
+    number_sections: yes
+    self_contained: no
+    theme: cerulean
+    toc: yes
+---
+
+# Load the data 
+
+## Read delim
+
+```{r load_data}
+counts_raw <- read.delim("data/counts-raw.txt.gz")
+counts_norm<- read.delim("data/counts-norm.txt.gz")
+```
+
+# Data exploration 
+
+What's the distribution of authors in all articles of our data set? 
+
+```{r author_histogram, echo=FALSE, fig.cap="Figure 1: Number of Authors per Article"}
+hist(counts_raw$authorsCount, main="Authors per paper",xlab="#authors")
+```
+
+What's the distribution of **Facebook** shares per article of our data set? 
+
+```{r facebook_histogram, echo=FALSE, fig.cap="Figure 2: Number of Facebook Shares per Article"}
+hist(counts_raw$facebookShareCount, main="Shares per paper",xlab="#shares",breaks=30)
+```
+
+The average number of Facebook shares per paper in the data set is `r mean(counts_raw$facebookShareCount)`
+
+# dpyr 
+
+```{r}
+library("dplyr")
+research <- filter(counts_raw, counts_raw$articleType == "Research Article")
+research_2006 <- filter(research, year == 2006)
+research_2006_fb <- filter(research, year == 2006, facebookCommentCount > 0 )
+nrow(research_2006_fb)
+research_2006_fb_tweet_disease <- filter(research,year==2006,
+                                         facebookCommentCount>0 | backtweetsCount >0,
+                                         grepl("Infectious Diseases", plosSubjectTags))
+
+nrow(research_2006_fb_tweet_disease)
+colnames(research)
+article_info <- select(research, doi, pubDate, journal, title, articleType, authorsCount)
+# better way to Select info 
+article_info <- select(research,doi:authorsCount)
+colnames(article_info)
+
+metrics <- select(research, contains("Count"), -authorsCount,
+                  f1000Factor, wikipediaCites)
+colnames(metrics)
+
+# get rows by index number 
+slice(article_info, 1:3)
+
+```
+
+What are people reading but not citing?
+One potential use of altmetrics data is recognizing articles that are widely read among the scientific community but are not cited as highly as similarly influential papers. Compile a data set named low_cite that contains the journal, title, and year of each research article that meets the following criteria:  
+
+* Published in 2008 or prior (cite)
+* Has more than 1,000 pdf downloads (pdfDownloadsCount)
+* Is contained in more than 15 Mendeley libraries (mendeleyReadersCount)
+* Has fewer than 10 citations as of 2011 (wosCountThru2011)
+
+```{r cite_question}
+low_cite <- filter(counts_raw, year <= 2008, pdfDownloadsCount > 1000, mendeleyReadersCount > 15, wosCountThru2011 < 10)
+nrow(low_cite)
+select(low_cite,title)
+```
+
+# Chaining commands with dplyr
+
+pipe character %>% 
+
+```{r pipes}
+facebook_2006 <- research %>% filter(year == 2006) %>% 
+   select(contains("facebook"))
+```
+
+arrange, works similar to function order 
+
+```{r arrange}
+research %>% arrange(desc(authorsCount),desc(wosCountThru2011)) %>% 
+  select(authorsCount,wosCountThru2011) %>% 
+  slice(1:10)
+```
+
+
+Titles of most cited articles
+Using a chain of pipes, output the titles of the three research articles with the largest 2011 citation count.
+
+Lots of authors
+Using a chain of pipes, output the author count, title, journal, and subject tags (plosSubjectTags) of the three research articles with the largest number of authors.
+
+```{r arrange_questions}
+research %>% arrange(desc(wosCountThru2011)) %>%  select(title,wosCountThru2011) %>% slice(1:3) 
+research %>% arrange(desc(authorsCount)) %>% select(authorsCount,title,journal,plosSubSubjectTags) %>% slice(1:3)
+```
+
+# summarizing with dplyr 
+
+```{r summarize}
+research <- research %>% mutate(weeksSincePublished=daysSincePublished / 7,
+                                yearsSincePublished=weeksSincePublished / 52)
+
+research %>% select(contains("Since")) %>% slice(1:10)
+```
+
+using summarize 
+
+```{r}
+research %>% summarize(plos_mean=mean(plosCommentCount),
+                       plos_sd = sd(plosCommentCount),
+                       num=n())
+```
+
+# Using group_by
+
+```{r group_by}
+research %>% group_by(journal) %>% 
+  summarize(tweets_mean = mean(backtweetsCount))
+```
+
+Summarizing the number of tweets per journal
+Create a new data frame, tweets_per_journal, that for each journal contains the total number of articles, the mean number of tweets received by articles in that journal, and the standard error of the mean (SEM) of the number of tweets. The SEM is the standard deviation divided by the square root of the sample size (i.e. the number of articles).
+
+```{r summarize_question}
+tweets_per_journal <- research %>% group_by(journal) %>% summarize(num=n(),mean=mean(backtweetsCount),sem=sd(backtweetsCount)/sqrt(num))
+```
+
+# GGPLOT2 
+
+```{r ggplot2_chunk}
+library("ggplot2")
+p <- ggplot(research,aes(x=pdfDownloadsCount,
+                         y=wosCountThru2011)) +
+            geom_point(aes(size=authorsCount,alpha=daysSincePublished),color="dodgerblue3") +
+            geom_smooth() + 
+            theme_bw()
+p
+
+p <- ggplot(research,aes(x=pdfDownloadsCount,
+                         y=wosCountThru2011,
+                         color=journal)) +
+            geom_point() + 
+            geom_smooth() + 
+            theme_bw()
+p
+
+```
+
+
+```{r}
+p <- ggplot(research,aes(x=daysSincePublished,
+                         y=wosCountThru2011)) +
+            geom_point(aes(color=journal),alpha=0.5) + 
+            geom_smooth(color="red") + theme_bw()
+p
+```
+
+
+# Using Scales 
+
+```{r}
+p <- ggplot(research,aes(x=log10(pdfDownloadsCount + 1),
+                         y=log10(wosCountThru2011 + 1))) +
+            geom_point(aes(size=authorsCount,alpha=daysSincePublished,color=journal)) +
+            geom_smooth() + 
+            theme_bw() + 
+            scale_x_continuous(breaks=c(1,3),labels=c(10,1000)) +
+            scale_y_continuous(breaks=c(1,3),labels=c(10,1000)) #,
+                               #limits = c(1,3))
+  p
+```
+
+different color options 
+
+```{r}
+p + scale_color_grey()
+p + scale_color_manual(values = c("red","green","blue","orange","pink","yellow","purple"))
+```
+
+
+```{r rcolorbrewer}
+library("RColorBrewer")
+display.brewer.all(type="qual")
+p + scale_color_brewer(palette="Dark2",
+                       labels=1:7,name="PLOS")
+```
+
+
+Update the plot to use a square root transformation instead of log10. Also color the points using the ColorBrewer palette “Accent”.
+
+```{r rcolorbrewer}
+library("RColorBrewer")
+display.brewer.all(type="qual")
+c <- ggplot(research,aes(x=sqrt(pdfDownloadsCount),
+                         y=sqrt(wosCountThru2011))) +
+            geom_point(aes(size=authorsCount,alpha=daysSincePublished,color=journal)) +
+            geom_smooth() + 
+            theme_bw() +
+            scale_color_brewer(palette="Accent")
+c
+```
+
+
+# Using Facets to make subplots
+
+```{r facets}
+p <- ggplot(research,aes(x=sqrt(pdfDownloadsCount),
+                         y=sqrt(wosCountThru2011))) +
+            geom_point(aes(size=authorsCount,alpha=daysSincePublished,color=journal)) +
+            geom_smooth() + 
+            theme_bw() +
+            scale_color_brewer(palette="Accent")
+p + facet_wrap(~journal,ncol = 2)
+```
+
+using facet_grid
+
+```{r}
+research <- mutate(research, immuno = grepl("Immunology",plosSubjectTags))
+p <- ggplot(research,aes(x=sqrt(pdfDownloadsCount),
+                         y=sqrt(wosCountThru2011))) +
+            geom_point(aes(size=authorsCount,alpha=daysSincePublished,color=journal)) +
+            geom_smooth() + 
+            theme_bw() +
+            scale_color_brewer(palette="Accent")
+p + facet_grid(journal~immuno)
+```
+
+
+# Using different geoms 
+
+```{r}
+p <- ggplot(research, aes(x=journal))
+```
+
+
+
+```{r barplot}
+tweets_per_journal <- research %>% group_by(journal) %>% summarize(num=n(),mean=mean(backtweetsCount),sem=sd(backtweetsCount)/sqrt(num))
+tweets_bar <- ggplot(tweets_per_journal, aes(x=journal,y=mean)) + geom_bar(stat="identity") +
+                     geom_errorbar(aes(ymin=mean-sem,ymax=mean+sem),width=0.5) +
+                     geom_text(aes(label=num),hjust=0,vjust=0)
+tweets_bar
+```
+
+
+Mean number of tweets per journal per year
+Modify the dplyr code above to calculate the mean, SEM, and sample size of the number of article tweets per journal and per year. Use facet_wrap to make a separate subplot per year.
+
+Visualizing a single distribution
+The geoms geom_histogram and geom_density can be used to create histograms and density plots, respectively. Using these geoms, visualize the distribution of 2011 citations (wosCountThru2011). Compare the raw distribution to log10 and square root transformations.
+
+```{r set18_problems}
+tweets_per_journal <- research %>% group_by(journal,year) %>% summarize(num=n(),mean=mean(backtweetsCount),sem=sd(backtweetsCount)/sqrt(num))
+
+tweets_bar <- ggplot(tweets_per_journal, aes(x=journal,y=mean)) + 
+                     geom_bar(stat="identity") + 
+                     geom_errorbar(aes(ymin=mean-sem,ymax=mean+sem),width=0.5) +
+                     geom_text(aes(label=num),hjust=0,vjust=0) + 
+                     facet_wrap(~year)
+tweets_bar
+
+tweets_bar <- ggplot(tweets_per_journal, aes(x=journal,y=mean)) + 
+                     #geom_bar(stat="identity") + 
+                     geom_point() + 
+                     geom_errorbar(aes(ymin=mean-sem,ymax=mean+sem),width=0.5) +
+                     geom_text(aes(label=num),hjust=0,vjust=0) + 
+                     facet_wrap(~year)
+tweets_bar
+
+```
+
+
+# Customizing the plot
+
+```{r themes}
+theme_set(theme_bw())
+tweets_bar + labs(title="Mean tweets per journal per yer", x="Journal",y="Mean number of tweets") + theme_classic() #theme_bw() #theme_minimal()
+
+```
+
+
